@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="tacklebox.png" alt="Tacklebox" width="400">
+</p>
+
 # Tacklebox
 
 *Where you keep your hooks.*
