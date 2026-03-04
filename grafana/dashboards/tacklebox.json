@@ -1,0 +1,131 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Active Sessions",
+      "type": "stat",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "rawSql": "SELECT count(*) as \"Active Sessions\" FROM sessions WHERE status = 'active';",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Sessions Timeline",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "rawSql": "SELECT date_trunc('hour', started_at) as time, source, count(*) as sessions FROM sessions WHERE $__timeFilter(started_at) GROUP BY time, source ORDER BY time;",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Tool Usage",
+      "type": "barchart",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "rawSql": "SELECT tool_name, count(*) as invocations FROM tool_events WHERE $__timeFilter(created_at) GROUP BY tool_name ORDER BY invocations DESC;",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Tool Failures",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "rawSql": "SELECT date_trunc('hour', created_at) as time, tool_name, count(*) as failures FROM tool_events WHERE hook_event = 'PostToolUseFailure' AND $__timeFilter(created_at) GROUP BY time, tool_name ORDER BY time;",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "File Lock Warnings",
+      "type": "table",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "rawSql": "SELECT te.created_at as time, s.cc_session_id as session, te.tool_input->>'file_path' as file, te.decision as action FROM tool_events te JOIN sessions s ON s.id = te.session_id WHERE te.decision = 'warn' AND $__timeFilter(te.created_at) ORDER BY te.created_at DESC LIMIT 50;",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Stop Blocks",
+      "type": "table",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "rawSql": "SELECT sb.created_at as time, s.cc_session_id as session, sb.reason FROM stop_blocks sb JOIN sessions s ON s.id = sb.session_id WHERE $__timeFilter(sb.created_at) ORDER BY sb.created_at DESC LIMIT 50;",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Notification Types",
+      "type": "piechart",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "rawSql": "SELECT notification_type, count(*) as total FROM notifications WHERE $__timeFilter(created_at) GROUP BY notification_type;",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Subagent Activity",
+      "type": "barchart",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        {
+          "rawSql": "SELECT agent_type, count(*) as spawns FROM subagent_events WHERE hook_event = 'SubagentStart' AND $__timeFilter(created_at) GROUP BY agent_type ORDER BY spawns DESC;",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["tacklebox"],
+  "templating": { "list": [] },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Tacklebox",
+  "uid": "tacklebox-main",
+  "version": 2
+}
