@@ -1,3 +1,4 @@
+# Configuration settings
 from pydantic_settings import BaseSettings
 
 
@@ -15,6 +16,8 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:8420"]
     API_KEY: str = ""
     MAX_REQUEST_BODY_BYTES: int = 1_048_576  # 1 MB
+    COORDINATION_ACTIVE_WINDOW_SEC: int = 1800  # Exclude sessions idle > 30 min
+    COORDINATION_REFRESH_SEC: int = 300  # Re-inject coordination at most every 5 min
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import settings
 from ..db import get_db
 from ..utils import fail_open
-from ..models import Session
+from ..models import Session, SessionContext
 from ..schemas import (
     NotificationInput,
     PreCompactInput,
@@ -24,6 +24,7 @@ from ..schemas import (
 )
 from ..services.audit import log_notification, log_tool_event, resolve_session
 from ..services.context import (
+    build_coordination_block,
     build_session_summary,
     is_context_injected,
     snapshot_pre_compact,
@@ -164,6 +165,38 @@ async def user_prompt(
                 )
             )
         return {}
+
+    # Already injected full context — check if coordination needs refresh
+    coordination_ctx = await db.execute(
+        select(SessionContext.value)
+        .where(SessionContext.session_id == internal_id)
+        .where(SessionContext.scope == "session")
+        .where(SessionContext.key == "coordination_last_injected")
+    )
+    last_injected = coordination_ctx.scalar_one_or_none()
+
+    now = datetime.now(timezone.utc)
+    stale = (
+        last_injected is None
+        or (now - datetime.fromisoformat(last_injected["at"])).total_seconds()
+        > settings.COORDINATION_REFRESH_SEC
+    )
+
+    if stale:
+        block = await build_coordination_block(db, event.cwd, event.session_id)
+        if block:
+            await upsert_session_context(
+                db, internal_id, event.cwd,
+                "coordination_last_injected", {"at": now.isoformat()}
+            )
+            await db.commit()
+            return serialize_response(
+                UserPromptSubmitResponse(
+                    hookSpecificOutput=UserPromptSubmitSpecific(
+                        additionalContext=f"[coordination update]\n{block}"
+                    )
+                )
+            )
 
     await db.commit()
     return {}

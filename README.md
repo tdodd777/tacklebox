@@ -27,7 +27,7 @@ Tacklebox fixes all of these by sitting between Claude Code and a PostgreSQL dat
 - **File lock detection** — Warns when two sessions are editing the same file
 - **Stop hook blocking** — Prevents a session from ending if it has incomplete tasks (with a safety valve)
 - **Context injection** — Automatically injects relevant context from prior sessions on startup
-- **Coordination** — Shows how many other active sessions are working in the same project
+- **Multi-session coordination** — Shows each sibling session's latest activity (not just a count), refreshes mid-conversation, and tracks completed tasks across teammates
 - **Observability** — Grafana dashboard with 8 panels for monitoring sessions, tool usage, file conflicts, and more
 
 ## Architecture
@@ -51,7 +51,7 @@ All handlers use a **fail-open** pattern — any unhandled exception returns an 
 
 ## Context Injection
 
-On each new session, Tacklebox injects project context so Claude starts with awareness of prior work. This includes project-scoped context keys you've set, recently edited files, the last bash command result, and how many other sessions are active in the same directory.
+On each new session, Tacklebox injects project context so Claude starts with awareness of prior work. This includes project-scoped context keys you've set, recently edited files, the last bash command result, and coordination info about sibling sessions.
 
 **Example** — what Claude sees on the first prompt of a new session:
 
@@ -59,16 +59,42 @@ On each new session, Tacklebox injects project context so Claude starts with awa
 [context] sprint_goal: Ship dashboard filtering and session replay
 [context] last_edited_files: ['src/auth.py', 'tests/test_auth.py', 'README.md']
 [context] incomplete_tasks: [{'task': 'Add rate limiting', 'priority': 'high'}]
-[coordination] 1 other active session(s) in this project
+[coordination] 2 other active session(s) in this project:
+  [session abc12] Edit src/api.py (30s ago)
+  [session def45] Bash "pytest tests/" (2m ago)
+[tasks] Recently completed:
+  "Implement auth" (by alpha, 5m ago)
 ```
 
 For resumed/compacted sessions, the injection also includes recent file edits, the last bash command and its exit code, and any recent tool failures.
 
-### Known issue: `SessionStart` bug for new sessions
+### Multi-Session Coordination
 
-Claude Code currently discards the `SessionStart` hook response for new `startup` sessions ([anthropics/claude-code#10373](https://github.com/anthropics/claude-code/issues/10373)). As a workaround, Tacklebox injects context via the `UserPromptSubmit` hook on the **first prompt** of a startup session instead. A `context_injected` flag prevents re-injection on subsequent prompts.
+When you run multiple Claude Code sessions (or a team of agents) in the same project, each session needs to know what the others are doing — otherwise they'll duplicate work or step on each other's files.
+
+Tacklebox solves this in three ways:
+
+1. **Rich activity details** — Instead of just "2 other sessions exist", each session sees *what* the others are actively doing: which files they're editing, what commands they're running, and how recently. Sessions idle for more than 30 minutes are excluded so the list stays relevant.
+
+2. **Mid-conversation refresh** — Coordination info isn't just injected once at session start. Every 5 minutes, when you submit a prompt, Tacklebox checks for new or changed sibling sessions and re-injects an update. Solo sessions see nothing — no noise when you're working alone.
+
+3. **Task completion tracking** — When a teammate finishes a task (via the `TaskCompleted` hook), Tacklebox records it. Future sessions see a summary of recently completed work so they know what's already been done.
+
+### Known Issues
+
+#### `SessionStart` response discarded for new sessions
+
+Claude Code has a long-standing bug where the `SessionStart` hook response is discarded for new `startup` sessions ([anthropics/claude-code#10373](https://github.com/anthropics/claude-code/issues/10373)). As of March 2026, the behavior is **intermittent** — some users report it working in recent VSCode extension versions, while others still see silent failures on the same or newer builds. The bug appears environment-dependent and can regress between versions.
+
+Because of this unreliability, Tacklebox uses a **dual-path approach**: `SessionStart` builds and returns context normally (so it works immediately when the bug is fixed), but for `startup` sessions it deliberately skips setting the `context_injected` flag. This lets `UserPromptSubmit` on the **first prompt** act as a fallback — it checks the flag, sees it's unset, injects the same context, and sets the flag so subsequent prompts skip injection. If `SessionStart` worked, the user sees context twice (harmless); if it was silently discarded, `UserPromptSubmit` catches it. Either way, context is delivered reliably.
 
 For non-startup sessions (resume, compact, clear), `SessionStart` works correctly and sets the flag so `UserPromptSubmit` skips injection.
+
+#### HTTP hooks silently fail in concurrent sessions
+
+When running multiple Claude Code sessions in the same project, the second (and subsequent) sessions may report hook "success" client-side without actually sending HTTP requests to the server ([anthropics/claude-code#31199](https://github.com/anthropics/claude-code/issues/31199)). `SessionStart` fires correctly for all sessions, but `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and other events silently fail. The first session after a VS Code restart works fine.
+
+**Workaround:** Use one Claude Code session per project at a time, or restart VS Code between sessions.
 
 ## Quick Start
 
@@ -107,7 +133,7 @@ curl http://localhost:8420/health
 
 ### Enable Hooks
 
-Copy `.claude/settings.json` to your global Claude Code settings (`~/.claude/settings.json`) or leave it in the repo for project-scoped hooks. The config registers 12 hook event types pointing at `http://localhost:8420/hooks/*`.
+Copy `.claude/settings.json` to your global Claude Code settings (`~/.claude/settings.json`) or leave it in the repo for project-scoped hooks. The config registers 14 hook event types pointing at `http://localhost:8420/hooks/*`.
 
 ## Configuration
 
@@ -128,6 +154,8 @@ All settings are optional with sensible defaults. Set via `.env` or environment 
 | `CORS_ORIGINS` | `["http://localhost:3000", "http://localhost:8420"]` | Allowed CORS origins |
 | `API_KEY` | *(empty — disabled)* | Set to require `X-API-Key` header on all endpoints (except `/health`) |
 | `MAX_REQUEST_BODY_BYTES` | `1048576` | Max request body size (1 MB) |
+| `COORDINATION_ACTIVE_WINDOW_SEC` | `1800` | Exclude sessions idle longer than 30 min from coordination |
+| `COORDINATION_REFRESH_SEC` | `300` | Min seconds between coordination re-injections on subsequent prompts |
 
 ## Database
 
@@ -178,7 +206,7 @@ Access at `http://localhost:3000` (login with `admin` / `tacklebox`). Panels inc
 docker compose exec db psql -U tacklebox -d postgres \
   -c "CREATE DATABASE tacklebox_test OWNER tacklebox;"
 
-# Run all 18 tests
+# Run all 22 tests
 pytest tests/ -v
 ```
 

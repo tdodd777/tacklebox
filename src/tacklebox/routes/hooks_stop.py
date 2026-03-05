@@ -24,7 +24,7 @@ from ..services.audit import (
     log_tool_event,
     resolve_session,
 )
-from ..services.context import get_incomplete_tasks
+from ..services.context import build_coordination_block, get_incomplete_tasks, upsert_project_context
 from ..services.responses import serialize_response
 
 logger = logging.getLogger("tacklebox")
@@ -115,6 +115,12 @@ async def subagent_start(
         .limit(10)
     )
     parts = [f"[context] {row.key}: {row.value}" for row in ctx_rows]
+
+    # Add coordination block so subagents see sibling session activity
+    coordination = await build_coordination_block(db, event.cwd, event.session_id)
+    if coordination:
+        parts.append(coordination)
+
     await db.commit()
 
     if parts:
@@ -165,5 +171,18 @@ async def task_completed(
             "team_name": event.team_name,
         },
     )
+
+    # Upsert completed_tasks project context (keep last 10)
+    from ..services.context import get_project_context_value
+    existing = await get_project_context_value(db, event.cwd, "completed_tasks")
+    task_list = existing if isinstance(existing, list) else []
+    task_list.append({
+        "task_id": event.task_id,
+        "subject": event.task_subject,
+        "teammate": event.teammate_name,
+    })
+    task_list = task_list[-10:]  # Keep last 10
+    await upsert_project_context(db, internal_id, event.cwd, "completed_tasks", task_list)
+
     await db.commit()
     return {}
