@@ -144,16 +144,20 @@ Interactive docs available at `http://localhost:8420/docs` when the server is ru
 
 ## Grafana Dashboard
 
-Access at `http://localhost:3000` (login with `admin` / `tacklebox`). The pre-provisioned dashboard includes:
+Get real-time visibility into what Claude Code is doing across all your sessions. The pre-provisioned dashboard updates live as hooks fire, so you can watch tool usage, file conflicts, and session activity as they happen.
 
-- Active session count
-- Sessions timeline (by source)
-- Tool usage breakdown
-- Tool failure tracking
-- File lock warnings
-- Stop block history
-- Notification type distribution
-- Subagent activity
+<p align="center">
+  <img src="grafana.png" alt="Tacklebox Grafana Dashboard" width="800">
+</p>
+
+Access at `http://localhost:3000` (login with `admin` / `tacklebox`). Panels include:
+
+- **Active Sessions** — how many sessions are running right now
+- **Sessions Timeline** — session starts over time, broken down by source (startup, resume, compact, clear)
+- **Tool Usage** — which tools Claude is using and how often (Bash, Edit, Write, etc.)
+- **Tool Failures** — failure spikes so you can spot broken commands or flaky tools
+- **File Lock Warnings** — when two sessions try to edit the same file
+- **Stop Blocks** — when sessions were prevented from ending due to incomplete tasks
 
 ## Testing
 
