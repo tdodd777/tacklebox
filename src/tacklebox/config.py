@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     LOG_FILE: str = "~/.local/share/tacklebox/server.log"
     LOG_LEVEL: str = "INFO"
     LOG_PROMPTS: bool = False
+    CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:8420"]
+    API_KEY: str = ""
+    MAX_REQUEST_BODY_BYTES: int = 1_048_576  # 1 MB
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

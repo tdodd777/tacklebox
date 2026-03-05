@@ -104,6 +104,13 @@ class SessionContext(Base):
             unique=True,
             postgresql_where=text("scope = 'project'"),
         ),
+        Index(
+            "idx_ctx_session_key",
+            "session_id",
+            "key",
+            unique=True,
+            postgresql_where=text("scope = 'session'"),
+        ),
     )
 
 
@@ -121,6 +128,11 @@ class Notification(Base):
     message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        Index("idx_notifications_session", "session_id"),
+        Index("idx_notifications_time", "created_at"),
     )
 
 

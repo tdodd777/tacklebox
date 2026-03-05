@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import (
@@ -15,7 +15,11 @@ from ..models import (
 async def resolve_session(
     db: AsyncSession, cc_session_id: str, cwd: str
 ) -> uuid.UUID:
-    """Look up or create the internal session ID."""
+    """Look up or create the internal session ID.
+
+    Uses INSERT ON CONFLICT to avoid race conditions when two concurrent
+    requests try to create the same session.
+    """
     result = await db.execute(
         select(Session.id).where(Session.cc_session_id == cc_session_id)
     )
@@ -23,15 +27,17 @@ async def resolve_session(
     if row:
         return row
 
-    new_session = Session(
-        cc_session_id=cc_session_id,
-        cwd=cwd,
-        source="startup",
-        status="active",
+    # Use raw INSERT ON CONFLICT to handle concurrent inserts atomically
+    result = await db.execute(
+        text("""
+            INSERT INTO sessions (cc_session_id, cwd, source, status)
+            VALUES (:cc_session_id, :cwd, 'startup', 'active')
+            ON CONFLICT (cc_session_id) DO UPDATE SET cc_session_id = EXCLUDED.cc_session_id
+            RETURNING id
+        """),
+        {"cc_session_id": cc_session_id, "cwd": cwd},
     )
-    db.add(new_session)
-    await db.flush()
-    return new_session.id
+    return result.scalar_one()
 
 
 async def log_tool_event(

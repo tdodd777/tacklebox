@@ -28,10 +28,12 @@ async def _setup_and_clean():
     from tacklebox.models import Base
 
     async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield engine
     async with engine.begin() as conn:
         for table in TABLES:
+            # Safe: table names are hardcoded constants above, not user input
             await conn.execute(text(f"TRUNCATE {table} CASCADE"))
     await engine.dispose()
 

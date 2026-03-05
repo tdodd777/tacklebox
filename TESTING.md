@@ -360,7 +360,7 @@ This is the real end-to-end test. The hooks config is already in `.claude/settin
 ## 11. Check Grafana Dashboards
 
 1. Open http://localhost:3000 in your browser.
-2. Login with `admin` / `admin` (skip the password change prompt).
+2. Login with `admin` / `tacklebox` (skip the password change prompt).
 3. Navigate to **Dashboards** in the left sidebar.
 4. Open the **Tacklebox** dashboard.
 

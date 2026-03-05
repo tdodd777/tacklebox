@@ -1,3 +1,4 @@
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -12,8 +13,10 @@ router = APIRouter()
 
 @router.get("/sessions")
 async def list_sessions(
-    status: str | None = Query(None),
+    status: Literal["active", "completed", "interrupted"] | None = Query(None),
     cwd: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     q = select(Session).order_by(Session.started_at.desc())
@@ -21,7 +24,7 @@ async def list_sessions(
         q = q.where(Session.status == status)
     if cwd:
         q = q.where(Session.cwd == cwd)
-    result = await db.execute(q.limit(100))
+    result = await db.execute(q.offset(offset).limit(limit))
     sessions = result.scalars().all()
     return [
         {
@@ -41,13 +44,16 @@ async def list_sessions(
 @router.get("/sessions/{session_id}/events")
 async def session_events(
     session_id: UUID,
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(ToolEvent)
         .where(ToolEvent.session_id == session_id)
         .order_by(ToolEvent.created_at.desc())
-        .limit(200)
+        .offset(offset)
+        .limit(limit)
     )
     events = result.scalars().all()
     return [

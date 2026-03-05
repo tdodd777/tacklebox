@@ -3,8 +3,9 @@ import logging
 import traceback
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy import text
 
 from .config import settings
@@ -23,11 +24,12 @@ async def cleanup_stale_sessions():
                     text("""
                     UPDATE sessions SET status = 'interrupted', ended_at = now()
                     WHERE status = 'active'
-                      AND id NOT IN (
-                          SELECT DISTINCT session_id FROM tool_events
-                          WHERE created_at > now() - make_interval(secs => :timeout)
-                      )
                       AND started_at < now() - make_interval(secs => :timeout)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM tool_events te
+                          WHERE te.session_id = sessions.id
+                            AND te.created_at > now() - make_interval(secs => :timeout)
+                      )
                 """),
                     {"timeout": settings.SESSION_TIMEOUT_SEC},
                 )
@@ -69,15 +71,50 @@ app = FastAPI(title="Tacklebox", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
+class RequestBodyLimitMiddleware(BaseHTTPMiddleware):
+    """Reject requests with bodies exceeding MAX_REQUEST_BODY_BYTES."""
+
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > settings.MAX_REQUEST_BODY_BYTES:
+            return Response(
+                content='{"detail":"Request body too large"}',
+                status_code=413,
+                media_type="application/json",
+            )
+        return await call_next(request)
+
+
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    """Validate X-API-Key header when API_KEY is configured."""
+
+    async def dispatch(self, request: Request, call_next):
+        if settings.API_KEY and request.url.path != "/health":
+            key = request.headers.get("x-api-key", "")
+            if key != settings.API_KEY:
+                return Response(
+                    content='{"detail":"Invalid or missing API key"}',
+                    status_code=401,
+                    media_type="application/json",
+                )
+        return await call_next(request)
+
+
+app.add_middleware(RequestBodyLimitMiddleware)
+app.add_middleware(APIKeyMiddleware)
+
+
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    from .utils import fail_open_error_count
+
+    return {"status": "ok", "fail_open_errors": fail_open_error_count}
 
 
 # Import and include routers

@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -14,7 +14,9 @@ router = APIRouter()
 @router.get("/context")
 async def get_context(
     cwd: str = Query(...),
-    scope: str = Query("project"),
+    scope: Literal["session", "project"] = Query("project"),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     q = (
@@ -22,7 +24,8 @@ async def get_context(
         .where(SessionContext.cwd == cwd)
         .where(SessionContext.scope == scope)
         .order_by(SessionContext.updated_at.desc())
-        .limit(50)
+        .offset(offset)
+        .limit(limit)
     )
     result = await db.execute(q)
     rows = result.scalars().all()

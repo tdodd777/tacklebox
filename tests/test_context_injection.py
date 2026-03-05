@@ -99,3 +99,121 @@ async def test_coordination_count_in_context(client):
     ctx = specific.get("additionalContext", "")
     assert "coordination" in ctx
     assert "1 other active session" in ctx
+
+
+async def test_user_prompt_injects_context_on_first_prompt(client):
+    """First UserPromptSubmit on a startup session returns additionalContext."""
+    # Create a session and add project context
+    await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "ups-inject-1",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/ups-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+    await client.put(
+        "/context",
+        json={
+            "cwd": "/ups-project",
+            "session_id": "ups-inject-1",
+            "key": "team_notes",
+            "value": {"note": "Focus on performance"},
+        },
+    )
+
+    # First prompt should inject context
+    response = await client.post(
+        "/hooks/user-prompt",
+        json={
+            "session_id": "ups-inject-1",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/ups-project",
+            "permission_mode": "default",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Hello",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    specific = body.get("hookSpecificOutput", {})
+    assert "team_notes" in specific.get("additionalContext", "")
+
+
+async def test_user_prompt_skips_context_on_subsequent_prompts(client):
+    """Second UserPromptSubmit returns empty (context already injected)."""
+    await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "ups-skip-1",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/ups-skip-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+
+    # First prompt sets the flag
+    await client.post(
+        "/hooks/user-prompt",
+        json={
+            "session_id": "ups-skip-1",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/ups-skip-project",
+            "permission_mode": "default",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "First prompt",
+        },
+    )
+
+    # Second prompt should return empty
+    response = await client.post(
+        "/hooks/user-prompt",
+        json={
+            "session_id": "ups-skip-1",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/ups-skip-project",
+            "permission_mode": "default",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Second prompt",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {}
+
+
+async def test_resume_session_start_prevents_user_prompt_injection(client):
+    """Resume SessionStart sets context_injected flag, so UserPromptSubmit skips."""
+    await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "ups-resume-1",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/ups-resume-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "resume",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+
+    # UserPromptSubmit should skip injection (flag was set by SessionStart)
+    response = await client.post(
+        "/hooks/user-prompt",
+        json={
+            "session_id": "ups-resume-1",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/ups-resume-project",
+            "permission_mode": "default",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Hello after resume",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {}

@@ -19,9 +19,16 @@ from ..schemas import (
     SessionStartResponse,
     SessionStartSpecific,
     UserPromptSubmitInput,
+    UserPromptSubmitResponse,
+    UserPromptSubmitSpecific,
 )
 from ..services.audit import log_notification, log_tool_event, resolve_session
-from ..services.context import build_session_summary, snapshot_pre_compact
+from ..services.context import (
+    build_session_summary,
+    is_context_injected,
+    snapshot_pre_compact,
+    upsert_session_context,
+)
 from ..services.responses import serialize_response
 
 logger = logging.getLogger("tacklebox")
@@ -61,6 +68,16 @@ async def session_start(event: SessionStartInput, db: AsyncSession = Depends(get
     summary = await build_session_summary(
         db, event.cwd, event.session_id, event.source.value
     )
+
+    # Set context_injected flag for non-startup sources.
+    # Startup sessions skip this because Claude Code discards the SessionStart
+    # response for new sessions (anthropics/claude-code#10373). UserPromptSubmit
+    # handles injection for startup sessions instead.
+    if event.source.value != "startup":
+        await upsert_session_context(
+            db, session.id, event.cwd, "context_injected", {"injected": True}
+        )
+
     await db.commit()
 
     if summary:
@@ -127,6 +144,27 @@ async def user_prompt(
         tool_name="UserPrompt",
         tool_input={"prompt_info": log_value},
     )
+
+    # Inject context on first prompt if not already done (fallback for startup
+    # sessions where SessionStart response is discarded by Claude Code).
+    if not await is_context_injected(db, internal_id):
+        summary = await build_session_summary(
+            db, event.cwd, event.session_id, "startup"
+        )
+        await upsert_session_context(
+            db, internal_id, event.cwd, "context_injected", {"injected": True}
+        )
+        await db.commit()
+        if summary:
+            return serialize_response(
+                UserPromptSubmitResponse(
+                    hookSpecificOutput=UserPromptSubmitSpecific(
+                        additionalContext=summary
+                    )
+                )
+            )
+        return {}
+
     await db.commit()
     return {}
 

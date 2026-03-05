@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime, timezone
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Session, SessionContext, ToolEvent
@@ -112,29 +112,28 @@ async def upsert_project_context(
     key: str,
     value: dict | list,
 ) -> None:
-    """Upsert a project-scoped context key."""
-    existing = await db.execute(
-        select(SessionContext)
-        .where(SessionContext.cwd == cwd)
-        .where(SessionContext.scope == "project")
-        .where(SessionContext.key == key)
+    """Upsert a project-scoped context key.
+
+    Uses INSERT ON CONFLICT against the partial unique index
+    idx_ctx_project_key (cwd, key WHERE scope='project') for atomicity.
+    """
+    stmt = pg_insert(SessionContext).values(
+        session_id=session_id,
+        cwd=cwd,
+        scope="project",
+        key=key,
+        value=value,
     )
-    row = existing.scalar_one_or_none()
-    if row:
-        row.value = value
-        row.session_id = session_id
-        row.updated_at = datetime.now(timezone.utc)
-    else:
-        db.add(
-            SessionContext(
-                session_id=session_id,
-                cwd=cwd,
-                scope="project",
-                key=key,
-                value=value,
-            )
-        )
-    await db.flush()
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["cwd", "key"],
+        index_where=SessionContext.scope == "project",
+        set_={
+            "value": stmt.excluded.value,
+            "session_id": stmt.excluded.session_id,
+            "updated_at": func.now(),
+        },
+    )
+    await db.execute(stmt)
 
 
 async def upsert_session_context(
@@ -144,28 +143,27 @@ async def upsert_session_context(
     key: str,
     value: dict | list,
 ) -> None:
-    """Upsert a session-scoped context key."""
-    existing = await db.execute(
-        select(SessionContext)
-        .where(SessionContext.session_id == session_id)
-        .where(SessionContext.scope == "session")
-        .where(SessionContext.key == key)
+    """Upsert a session-scoped context key.
+
+    Uses INSERT ON CONFLICT against the partial unique index
+    idx_ctx_session_key (session_id, key WHERE scope='session') for atomicity.
+    """
+    stmt = pg_insert(SessionContext).values(
+        session_id=session_id,
+        cwd=cwd,
+        scope="session",
+        key=key,
+        value=value,
     )
-    row = existing.scalar_one_or_none()
-    if row:
-        row.value = value
-        row.updated_at = datetime.now(timezone.utc)
-    else:
-        db.add(
-            SessionContext(
-                session_id=session_id,
-                cwd=cwd,
-                scope="session",
-                key=key,
-                value=value,
-            )
-        )
-    await db.flush()
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["session_id", "key"],
+        index_where=SessionContext.scope == "session",
+        set_={
+            "value": stmt.excluded.value,
+            "updated_at": func.now(),
+        },
+    )
+    await db.execute(stmt)
 
 
 async def snapshot_pre_compact(
@@ -218,3 +216,16 @@ async def get_incomplete_tasks(
     if row and row:
         return row
     return None
+
+
+async def is_context_injected(
+    db: AsyncSession, session_id: uuid.UUID
+) -> bool:
+    """Check if context has already been injected for this session."""
+    result = await db.execute(
+        select(SessionContext.id)
+        .where(SessionContext.session_id == session_id)
+        .where(SessionContext.scope == "session")
+        .where(SessionContext.key == "context_injected")
+    )
+    return result.scalar_one_or_none() is not None
