@@ -8,6 +8,18 @@
 
 A FastAPI + PostgreSQL + Grafana server that captures [Claude Code hook](https://docs.anthropic.com/en/docs/claude-code/hooks) events, enabling session coordination, context persistence, and audit logging across Claude Code sessions.
 
+## Why Tacklebox?
+
+Claude Code sessions are **stateless, opaque, and uncoordinated** out of the box:
+
+- **No memory across sessions.** Each session starts from scratch. You re-explain the sprint goal, the files you were editing, and the tasks that are still open — every single time.
+- **No visibility.** You can't see which tools Claude is calling, how often commands fail, or how time is being spent across sessions. It's a black box.
+- **No coordination.** Run two sessions in the same project and they'll silently overwrite each other's file edits with no warning.
+- **Sessions end mid-task.** Claude can decide to stop before the work is done, and there's nothing preventing it.
+- **No audit trail.** There's no record of what Claude did — which files it touched, what commands it ran, or what failed.
+
+Tacklebox fixes all of these by sitting between Claude Code and a PostgreSQL database, capturing every hook event and feeding context back in.
+
 ## What It Does
 
 - **Session tracking** — Records when Claude Code sessions start, end, and what they do
