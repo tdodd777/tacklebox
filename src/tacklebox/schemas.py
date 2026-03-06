@@ -40,7 +40,7 @@ class SessionStartInput(HookInput):
 
 
 class SessionEndInput(HookInput):
-    reason: str
+    reason: str = ""
 
 
 class PreToolUseInput(HookInput):

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, String, Text, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,9 +27,9 @@ class Session(Base):
         Text, nullable=False, server_default="active"
     )
     started_at: Mapped[datetime] = mapped_column(
-        nullable=False, server_default=text("now()")
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
-    ended_at: Mapped[datetime | None] = mapped_column()
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     end_reason: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
@@ -61,7 +61,7 @@ class ToolEvent(Base):
     error: Mapped[str | None] = mapped_column(Text)
     decision: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
-        nullable=False, server_default=text("now()")
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
 
     __table_args__ = (
@@ -87,10 +87,10 @@ class SessionContext(Base):
     key: Mapped[str] = mapped_column(Text, nullable=False)
     value: Mapped[dict] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        nullable=False, server_default=text("now()")
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
     updated_at: Mapped[datetime] = mapped_column(
-        nullable=False, server_default=text("now()")
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
 
     __table_args__ = (
@@ -127,7 +127,7 @@ class Notification(Base):
     title: Mapped[str | None] = mapped_column(Text)
     message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
-        nullable=False, server_default=text("now()")
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
 
     __table_args__ = (
@@ -151,7 +151,7 @@ class SubagentEvent(Base):
     agent_transcript_path: Mapped[str | None] = mapped_column(Text)
     last_assistant_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
-        nullable=False, server_default=text("now()")
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
 
     __table_args__ = (
@@ -175,7 +175,7 @@ class StopBlock(Base):
     )
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        nullable=False, server_default=text("now()")
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
 
     __table_args__ = (Index("idx_stop_blocks_session", "session_id"),)

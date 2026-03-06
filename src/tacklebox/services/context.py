@@ -237,7 +237,7 @@ async def upsert_project_context(
     )
     stmt = stmt.on_conflict_do_update(
         index_elements=["cwd", "key"],
-        index_where=SessionContext.scope == "project",
+        index_where=text("scope = 'project'"),
         set_={
             "value": stmt.excluded.value,
             "session_id": stmt.excluded.session_id,
@@ -268,7 +268,7 @@ async def upsert_session_context(
     )
     stmt = stmt.on_conflict_do_update(
         index_elements=["session_id", "key"],
-        index_where=SessionContext.scope == "session",
+        index_where=text("scope = 'session'"),
         set_={
             "value": stmt.excluded.value,
             "updated_at": func.now(),

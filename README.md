@@ -6,58 +6,34 @@
 
 *Where you keep your hooks.*
 
-A FastAPI + PostgreSQL + Grafana server that captures [Claude Code hook](https://docs.anthropic.com/en/docs/claude-code/hooks) events, enabling session coordination, context persistence, and audit logging across Claude Code sessions.
-
-## Why Tacklebox?
-
-Claude Code sessions are **stateless, opaque, and uncoordinated** out of the box:
-
-- **No memory across sessions.** Each session starts from scratch. You re-explain the sprint goal, the files you were editing, and the tasks that are still open — every single time.
-- **No visibility.** You can't see which tools Claude is calling, how often commands fail, or how time is being spent across sessions. It's a black box.
-- **No coordination.** Run two sessions in the same project and they'll silently overwrite each other's file edits with no warning.
-- **Sessions end mid-task.** Claude can decide to stop before the work is done, and there's nothing preventing it.
-- **No audit trail.** There's no record of what Claude did — which files it touched, what commands it ran, or what failed.
-
-Tacklebox fixes all of these by sitting between Claude Code and a PostgreSQL database, capturing every hook event and feeding context back in.
+A FastAPI + PostgreSQL server that captures [Claude Code hook](https://docs.anthropic.com/en/docs/claude-code/hooks) events, providing context persistence, multi-session coordination, and audit logging.
 
 ## What It Does
 
-- **Session tracking** — Records when Claude Code sessions start, end, and what they do
-- **Context persistence** — Stores project-scoped and session-scoped key-value context that survives across sessions
-- **File lock detection** — Warns when two sessions are editing the same file
-- **Stop hook blocking** — Prevents a session from ending if it has incomplete tasks (with a safety valve)
-- **Context injection** — Automatically injects relevant context from prior sessions on startup
-- **Multi-session coordination** — Shows each sibling session's latest activity (not just a count), refreshes mid-conversation, and tracks completed tasks across teammates
-- **Observability** — Grafana dashboard with 8 panels for monitoring sessions, tool usage, file conflicts, and more
+- **Context injection** — New sessions automatically receive project context from prior sessions (edited files, sprint goals, incomplete tasks)
+- **Multi-session coordination** — Each session sees what other sessions are actively doing (which files, which commands, how recently)
+- **Session tracking** — Records session lifecycle, tool usage, and outcomes in PostgreSQL
+- **File lock detection** — Warns when two sessions edit the same file
+- **Stop hook blocking** — Prevents sessions from ending with incomplete tasks (with a safety valve after 3 blocks)
+- **Grafana dashboard** — Pre-provisioned panels for monitoring sessions, tool usage, and file conflicts
 
 ## Architecture
 
 ```
 Claude Code ──HTTP hooks──▶ Tacklebox (FastAPI :8420) ──▶ PostgreSQL
-                                          │
-                                    Grafana (:3000) reads from DB
+                                        │
+                                  Grafana (:3000) reads from DB
 ```
 
-18 hook endpoints handle events across the Claude Code lifecycle:
-
-| Category | Endpoints |
-|----------|-----------|
-| Session | `session-start`, `session-end` |
-| Tools | `pre-tool-use`, `post-tool-use`, `post-tool-use-failure`, `permission-request` |
-| Stop | `stop`, `subagent-start`, `subagent-stop` |
-| Other | `notification`, `pre-compact`, `user-prompt`, `teammate-idle`, `task-completed` |
-
-All handlers use a **fail-open** pattern — any unhandled exception returns an empty `{}` with status 200, so hooks never block Claude Code.
+14 hook endpoints across the Claude Code lifecycle. All handlers use a **fail-open** pattern — unhandled exceptions return `{}` with status 200, so hooks never block Claude Code. The `/health` endpoint exposes an error counter.
 
 ## Context Injection
 
-On each new session, Tacklebox injects project context so Claude starts with awareness of prior work. This includes project-scoped context keys you've set, recently edited files, the last bash command result, and coordination info about sibling sessions.
-
-**Example** — what Claude sees on the first prompt of a new session:
+On each new session, Tacklebox injects project context so Claude starts with awareness of prior work:
 
 ```
 [context] sprint_goal: Ship dashboard filtering and session replay
-[context] last_edited_files: ['src/auth.py', 'tests/test_auth.py', 'README.md']
+[context] last_edited_files: ['src/auth.py', 'tests/test_auth.py']
 [context] incomplete_tasks: [{'task': 'Add rate limiting', 'priority': 'high'}]
 [coordination] 2 other active session(s) in this project:
   [session abc12] Edit src/api.py (30s ago)
@@ -66,55 +42,29 @@ On each new session, Tacklebox injects project context so Claude starts with awa
   "Implement auth" (by alpha, 5m ago)
 ```
 
-For resumed/compacted sessions, the injection also includes recent file edits, the last bash command and its exit code, and any recent tool failures.
+Coordination refreshes every 5 minutes via `UserPromptSubmit`. Solo sessions see nothing — no noise when you're working alone.
 
-### Multi-Session Coordination
+### Known Issue: `SessionStart` for New Sessions
 
-When you run multiple Claude Code sessions (or a team of agents) in the same project, each session needs to know what the others are doing — otherwise they'll duplicate work or step on each other's files.
-
-Tacklebox solves this in three ways:
-
-1. **Rich activity details** — Instead of just "2 other sessions exist", each session sees *what* the others are actively doing: which files they're editing, what commands they're running, and how recently. Sessions idle for more than 30 minutes are excluded so the list stays relevant.
-
-2. **Mid-conversation refresh** — Coordination info isn't just injected once at session start. Every 5 minutes, when you submit a prompt, Tacklebox checks for new or changed sibling sessions and re-injects an update. Solo sessions see nothing — no noise when you're working alone.
-
-3. **Task completion tracking** — When a teammate finishes a task (via the `TaskCompleted` hook), Tacklebox records it. Future sessions see a summary of recently completed work so they know what's already been done.
-
-### Known Issues
-
-#### `SessionStart` response discarded for new sessions
-
-Claude Code has a long-standing bug where the `SessionStart` hook response is discarded for new `startup` sessions ([anthropics/claude-code#10373](https://github.com/anthropics/claude-code/issues/10373)). As of March 2026, the behavior is **intermittent** — some users report it working in recent VSCode extension versions, while others still see silent failures on the same or newer builds. The bug appears environment-dependent and can regress between versions.
-
-Because of this unreliability, Tacklebox uses a **dual-path approach**: `SessionStart` builds and returns context normally (so it works immediately when the bug is fixed), but for `startup` sessions it deliberately skips setting the `context_injected` flag. This lets `UserPromptSubmit` on the **first prompt** act as a fallback — it checks the flag, sees it's unset, injects the same context, and sets the flag so subsequent prompts skip injection. If `SessionStart` worked, the user sees context twice (harmless); if it was silently discarded, `UserPromptSubmit` catches it. Either way, context is delivered reliably.
-
-For non-startup sessions (resume, compact, clear), `SessionStart` works correctly and sets the flag so `UserPromptSubmit` skips injection.
-
-#### HTTP hooks silently fail in concurrent sessions
-
-When running multiple Claude Code sessions in the same project, the second (and subsequent) sessions may report hook "success" client-side without actually sending HTTP requests to the server ([anthropics/claude-code#31199](https://github.com/anthropics/claude-code/issues/31199)). `SessionStart` fires correctly for all sessions, but `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and other events silently fail. The first session after a VS Code restart works fine.
-
-**Workaround:** Use one Claude Code session per project at a time, or restart VS Code between sessions.
+Claude Code may discard `SessionStart` hook responses for new sessions ([anthropics/claude-code#10373](https://github.com/anthropics/claude-code/issues/10373)). Tacklebox works around this by also injecting context via `UserPromptSubmit` on the first prompt. If `SessionStart` worked, the context appears twice (harmless). If it was discarded, `UserPromptSubmit` catches it.
 
 ## Quick Start
 
 ### Prerequisites
 
 - Python 3.11+
-- Docker Desktop (for PostgreSQL and Grafana)
+- PostgreSQL
+- Docker (optional, for Grafana)
 
 ### Setup
 
 ```bash
-# Start PostgreSQL and Grafana
-docker compose up -d
-
 # Create venv and install
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Configure environment (defaults work with Docker Compose)
+# Configure environment (defaults work with local PostgreSQL)
 cp .env.example .env
 
 # Run database migrations
@@ -124,16 +74,16 @@ alembic upgrade head
 uvicorn tacklebox.main:app --host 127.0.0.1 --port 8420 --reload
 ```
 
-Verify it's running:
+Verify:
 
 ```bash
 curl http://localhost:8420/health
-# {"status":"ok"}
+# {"status":"ok","fail_open_errors":0}
 ```
 
 ### Enable Hooks
 
-Copy `.claude/settings.json` to your global Claude Code settings (`~/.claude/settings.json`) or leave it in the repo for project-scoped hooks. The config registers 14 hook event types pointing at `http://localhost:8420/hooks/*`.
+Add the hook configuration to your Claude Code settings (`~/.claude/settings.json`). See `.claude/settings.json` in this repo for the full config — it registers 14 hook event types pointing at `http://localhost:8420/hooks/*`.
 
 ## Configuration
 
@@ -142,96 +92,67 @@ All settings are optional with sensible defaults. Set via `.env` or environment 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | `postgresql+asyncpg://tacklebox:tacklebox@localhost/tacklebox` | PostgreSQL connection string |
-| `HOST` | `127.0.0.1` | Server bind address |
 | `PORT` | `8420` | Server port |
-| `FILE_LOCK_STALENESS_SEC` | `300` | Seconds before a file edit is no longer considered "recent" |
-| `CONTEXT_SUMMARY_LIMIT` | `20` | Max context entries injected on SessionStart |
-| `STOP_MAX_BLOCKS` | `3` | Allow stop after this many blocks (safety valve) |
-| `SESSION_TIMEOUT_SEC` | `14400` | Mark sessions interrupted after 4 hours of inactivity |
-| `LOG_FILE` | `~/.local/share/tacklebox/server.log` | Log file path |
-| `LOG_LEVEL` | `INFO` | Logging level |
+| `FILE_LOCK_STALENESS_SEC` | `300` | Seconds before a file edit is considered stale |
+| `STOP_MAX_BLOCKS` | `3` | Safety valve: allow stop after this many blocks |
+| `SESSION_TIMEOUT_SEC` | `14400` | Mark sessions interrupted after 4 hours |
 | `LOG_PROMPTS` | `false` | Log full prompts (`true`) or just a hash (`false`) |
-| `CORS_ORIGINS` | `["http://localhost:3000", "http://localhost:8420"]` | Allowed CORS origins |
-| `API_KEY` | *(empty — disabled)* | Set to require `X-API-Key` header on all endpoints (except `/health`) |
+| `API_KEY` | *(empty)* | Set to require `X-API-Key` header on all endpoints except `/health` |
 | `MAX_REQUEST_BODY_BYTES` | `1048576` | Max request body size (1 MB) |
 | `COORDINATION_ACTIVE_WINDOW_SEC` | `1800` | Exclude sessions idle longer than 30 min from coordination |
-| `COORDINATION_REFRESH_SEC` | `300` | Min seconds between coordination re-injections on subsequent prompts |
+| `COORDINATION_REFRESH_SEC` | `300` | Min seconds between coordination re-injections |
 
 ## Database
 
 6 tables managed via Alembic migrations:
 
-- **sessions** — Active/completed/interrupted Claude Code sessions
-- **tool_events** — Every tool invocation with input/output (JSONB)
-- **session_context** — Key-value context entries (project or session scoped)
-- **notifications** — Idle notices, warnings, errors from Claude Code
+- **sessions** — Claude Code session lifecycle
+- **tool_events** — Tool invocations with input/output (JSONB)
+- **session_context** — Key-value context (project or session scoped)
+- **notifications** — Warnings and errors from Claude Code
 - **subagent_events** — Subagent spawn and stop events
-- **stop_blocks** — Records of when/why session termination was blocked
+- **stop_blocks** — When/why session termination was blocked
 
 ## API
 
-Interactive docs available at `http://localhost:8420/docs` when the server is running.
-
-### Query Endpoints
+Interactive docs at `http://localhost:8420/docs`.
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /health` | Health check |
+| `GET /health` | Health check + error counter |
 | `GET /sessions` | List sessions (filter by `status`, `cwd`) |
-| `GET /sessions/{id}/events` | Get tool events for a session |
+| `GET /sessions/{id}/events` | Tool events for a session |
 | `GET /context` | Query context entries (filter by `cwd`, `scope`) |
 | `PUT /context` | Create or update context entries |
 
 ## Grafana Dashboard
 
-Get real-time visibility into what Claude Code is doing across all your sessions. The pre-provisioned dashboard updates live as hooks fire, so you can watch tool usage, file conflicts, and session activity as they happen.
-
 <p align="center">
   <img src="grafana.png" alt="Tacklebox Grafana Dashboard" width="800">
 </p>
 
-Access at `http://localhost:3000` (login with `admin` / `tacklebox`). Panels include:
-
-- **Active Sessions** — how many sessions are running right now
-- **Sessions Timeline** — session starts over time, broken down by source (startup, resume, compact, clear)
-- **Tool Usage** — which tools Claude is using and how often (Bash, Edit, Write, etc.)
-- **Tool Failures** — failure spikes so you can spot broken commands or flaky tools
-- **File Lock Warnings** — when two sessions try to edit the same file
-- **Stop Blocks** — when sessions were prevented from ending due to incomplete tasks
+Access at `http://localhost:3000` (default login: `admin` / `tacklebox`). Panels: active sessions, session timeline, tool usage, tool failures, file lock warnings, stop blocks.
 
 ## Testing
 
 ```bash
 # Create test database
-docker compose exec db psql -U tacklebox -d postgres \
-  -c "CREATE DATABASE tacklebox_test OWNER tacklebox;"
+createdb -U tacklebox tacklebox_test
 
-# Run all 22 tests
+# Run tests
 pytest tests/ -v
 ```
 
-Tests cover session lifecycle, context injection, file lock detection, pre-tool-use handling, and stop hook blocking. See [TESTING.md](TESTING.md) for the full setup and manual testing guide.
+22 tests covering session lifecycle, context injection, coordination, file lock detection, tool hooks, and stop blocking.
 
-## Security Considerations
+## Security
 
-Tacklebox is designed for **localhost-only** use as a development tool. Keep the following in mind:
+Designed for **localhost use**. For network deployment:
 
-- **No authentication by default.** All endpoints are open. Set `API_KEY` in your `.env` to require an `X-API-Key` header on all requests (except `/health`). When enabled, add the key to your hook config URLs or use a reverse proxy.
-- **Data retention.** All tool inputs, outputs, bash commands, and file paths are stored in PostgreSQL. If `LOG_PROMPTS=true`, full user prompts are stored. Review and purge data as needed.
-- **CORS.** Origins are restricted to localhost by default. If you expose the server on a network, configure `CORS_ORIGINS` to match your deployment.
-- **Fail-open design.** All hook handlers swallow exceptions and return `{}` to avoid blocking Claude Code. The `/health` endpoint exposes an error counter for monitoring.
-- **Request size limits.** Request bodies are capped at 1 MB by default (`MAX_REQUEST_BODY_BYTES`).
-
-### Production Deployment
-
-If deploying beyond localhost:
-
-1. **Set `API_KEY`** to a strong random value
-2. **Change database credentials** from the defaults (`tacklebox`/`tacklebox`)
-3. **Set `GRAFANA_ADMIN_PASSWORD`** environment variable (default: `tacklebox`)
-4. **Restrict `CORS_ORIGINS`** to your actual frontend origins
-5. **Use TLS** via a reverse proxy (nginx, Caddy, etc.)
-6. **Set `LOG_PROMPTS=false`** (the default) to avoid storing sensitive prompt content
+1. Set `API_KEY` to a strong random value
+2. Change database credentials from defaults
+3. Set `GRAFANA_ADMIN_PASSWORD` environment variable
+4. Use TLS via a reverse proxy
 
 ## Project Structure
 
@@ -255,12 +176,3 @@ src/tacklebox/
     ├── coordination.py  # File lock detection
     └── responses.py     # Response serialization
 ```
-
-## Tech Stack
-
-- **FastAPI** + **Uvicorn** — Async HTTP server
-- **SQLAlchemy** (async) + **asyncpg** — Database ORM and driver
-- **Alembic** — Database migrations
-- **PostgreSQL 16** — Primary data store
-- **Grafana** — Dashboards and monitoring
-- **pytest-asyncio** + **httpx** — Test framework
