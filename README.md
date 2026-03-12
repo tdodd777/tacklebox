@@ -6,6 +6,14 @@
 
 *Where you keep your hooks.*
 
+## TL;DR
+
+Tacklebox is a local server that makes Claude Code sessions smarter by remembering what happened before. When you start a new Claude session, it automatically gets context from previous sessions — what files were edited, what tasks are in progress, what errors occurred. If you're running multiple sessions in the same project, each one knows what the others are doing so they don't step on each other. All hook events are logged to PostgreSQL with a Grafana dashboard for visibility.
+
+**In short:** plug it in, and every Claude Code session starts with full project awareness instead of a blank slate.
+
+---
+
 A FastAPI + PostgreSQL server that captures [Claude Code hook](https://docs.anthropic.com/en/docs/claude-code/hooks) events, providing context persistence, multi-session coordination, and audit logging.
 
 ## What It Does
