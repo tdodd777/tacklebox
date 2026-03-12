@@ -11,6 +11,8 @@ from ..db import get_db
 from ..utils import fail_open
 from ..models import Session, SessionContext
 from ..schemas import (
+    ConfigChangeInput,
+    InstructionsLoadedInput,
     NotificationInput,
     PreCompactInput,
     PermissionRequestInput,
@@ -26,6 +28,7 @@ from ..services.audit import log_notification, log_tool_event, resolve_session
 from ..services.context import (
     build_coordination_block,
     build_session_summary,
+    extract_session_intent,
     is_context_injected,
     snapshot_pre_compact,
     upsert_session_context,
@@ -146,6 +149,20 @@ async def user_prompt(
         tool_input={"prompt_info": log_value},
     )
 
+    # Store session intent from first prompt only
+    if settings.LOG_SESSION_INTENT:
+        intent_exists = await db.execute(
+            select(SessionContext.id)
+            .where(SessionContext.session_id == internal_id)
+            .where(SessionContext.scope == "session")
+            .where(SessionContext.key == "session_intent")
+        )
+        if intent_exists.scalar_one_or_none() is None:
+            intent = extract_session_intent(event.prompt)
+            await upsert_session_context(
+                db, internal_id, event.cwd, "session_intent", {"intent": intent}
+            )
+
     # Inject context on first prompt if not already done (fallback for startup
     # sessions where SessionStart response is discarded by Claude Code).
     if not await is_context_injected(db, internal_id):
@@ -214,6 +231,50 @@ async def permission_request(
         hook_event="PermissionRequest",
         tool_name=event.tool_name,
         tool_input=event.tool_input,
+    )
+    await db.commit()
+    return {}
+
+
+@router.post("/hooks/instructions-loaded")
+@fail_open
+async def instructions_loaded(
+    event: InstructionsLoadedInput, db: AsyncSession = Depends(get_db)
+):
+    internal_id = await resolve_session(db, event.session_id, event.cwd)
+    await log_tool_event(
+        db,
+        internal_id,
+        hook_event="InstructionsLoaded",
+        tool_name="InstructionsLoaded",
+        tool_input={
+            "file_path": event.file_path,
+            "memory_type": event.memory_type,
+            "load_reason": event.load_reason,
+            "globs": event.globs,
+            "trigger_file_path": event.trigger_file_path,
+            "parent_file_path": event.parent_file_path,
+        },
+    )
+    await db.commit()
+    return {}
+
+
+@router.post("/hooks/config-change")
+@fail_open
+async def config_change(
+    event: ConfigChangeInput, db: AsyncSession = Depends(get_db)
+):
+    internal_id = await resolve_session(db, event.session_id, event.cwd)
+    await log_tool_event(
+        db,
+        internal_id,
+        hook_event="ConfigChange",
+        tool_name="ConfigChange",
+        tool_input={
+            "source": event.source,
+            "file_path": event.file_path,
+        },
     )
     await db.commit()
     return {}

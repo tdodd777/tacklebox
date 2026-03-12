@@ -12,6 +12,7 @@ class PermissionMode(str, Enum):
     accept_edits = "acceptEdits"
     dont_ask = "dontAsk"
     bypass_permissions = "bypassPermissions"
+    auto = "auto"
 
 
 class SessionSource(str, Enum):
@@ -27,7 +28,7 @@ class HookInput(BaseModel):
     session_id: str
     transcript_path: str
     cwd: str
-    permission_mode: PermissionMode
+    permission_mode: Optional[PermissionMode] = None
     hook_event_name: str
 
 
@@ -101,6 +102,20 @@ class NotificationInput(HookInput):
 class PreCompactInput(HookInput):
     trigger: str
     custom_instructions: str = ""
+
+
+class InstructionsLoadedInput(HookInput):
+    file_path: str
+    memory_type: str                       # "User", "Project", "Local", "Managed"
+    load_reason: Optional[str] = None      # "session_start", "nested_traversal", "path_glob_match", "include"
+    globs: Optional[list[str]] = None
+    trigger_file_path: Optional[str] = None
+    parent_file_path: Optional[str] = None
+
+
+class ConfigChangeInput(HookInput):
+    source: str               # "user_settings", "project_settings", "local_settings", "policy_settings", "skills"
+    file_path: Optional[str] = None
 
 
 class TeammateIdleInput(HookInput):

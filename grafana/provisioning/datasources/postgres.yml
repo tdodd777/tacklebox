@@ -3,7 +3,7 @@ datasources:
   - name: Tacklebox PostgreSQL
     type: grafana-postgresql-datasource
     uid: P8486BE4CAA945761
-    url: db:5432
+    url: host.docker.internal:5432
     database: tacklebox
     user: tacklebox
     isDefault: true

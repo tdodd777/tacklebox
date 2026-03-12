@@ -1,2 +1,184 @@
 {
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 10 -X POST http://localhost:8420/hooks/session-start -H 'Content-Type: application/json' -d @-",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 -X POST http://localhost:8420/hooks/session-end -H 'Content-Type: application/json' -d @-",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8420/hooks/stop",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8420/hooks/user-prompt",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|Bash",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8420/hooks/pre-tool-use",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|Bash",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8420/hooks/post-tool-use",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8420/hooks/post-tool-use-failure",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "Write|Edit|Bash",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8420/hooks/permission-request",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 -X POST http://localhost:8420/hooks/subagent-start -H 'Content-Type: application/json' -d @-",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8420/hooks/subagent-stop",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 -X POST http://localhost:8420/hooks/notification -H 'Content-Type: application/json' -d @-",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 -X POST http://localhost:8420/hooks/pre-compact -H 'Content-Type: application/json' -d @-",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 -X POST http://localhost:8420/hooks/teammate-idle -H 'Content-Type: application/json' -d @-",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8420/hooks/task-completed",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "InstructionsLoaded": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 -X POST http://localhost:8420/hooks/instructions-loaded -H 'Content-Type: application/json' -d @-",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "ConfigChange": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 -X POST http://localhost:8420/hooks/config-change -H 'Content-Type: application/json' -d @-",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
 }

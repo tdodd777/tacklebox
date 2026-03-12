@@ -36,22 +36,61 @@ def _truncate_command(cmd: str, max_len: int = 40) -> str:
     return cmd[:max_len - 3] + "..."
 
 
+def extract_session_intent(prompt: str, max_len: int = 100) -> str:
+    """Extract the first meaningful line of a prompt, truncated."""
+    for line in prompt.strip().splitlines():
+        line = line.strip()
+        if line:
+            return line[:max_len - 3] + "..." if len(line) > max_len else line
+    return prompt[:max_len].strip()
+
+
+async def _detect_directory_overlap(
+    db: AsyncSession, cwd: str, cc_session_id: str
+) -> list[tuple[str, str]]:
+    """Detect directory overlap between the current session and active siblings."""
+    rows = await db.execute(
+        text("""
+        WITH current_dirs AS (
+            SELECT DISTINCT regexp_replace(tool_input->>'file_path', '/[^/]+$', '') as dir
+            FROM tool_events te JOIN sessions s ON te.session_id = s.id
+            WHERE s.cc_session_id = :sid AND s.cwd = :cwd
+              AND te.tool_name IN ('Write', 'Edit') AND te.hook_event = 'PostToolUse'
+              AND te.created_at > now() - interval '1 hour'
+        ),
+        sibling_dirs AS (
+            SELECT DISTINCT s.cc_session_id,
+                   regexp_replace(te.tool_input->>'file_path', '/[^/]+$', '') as dir
+            FROM tool_events te JOIN sessions s ON te.session_id = s.id
+            WHERE s.cwd = :cwd AND s.status = 'active' AND s.cc_session_id != :sid
+              AND te.tool_name IN ('Write', 'Edit') AND te.hook_event = 'PostToolUse'
+              AND te.created_at > now() - interval '1 hour'
+        )
+        SELECT DISTINCT sd.cc_session_id, sd.dir
+        FROM sibling_dirs sd JOIN current_dirs cd ON sd.dir = cd.dir
+        LIMIT 5
+    """),
+        {"cwd": cwd, "sid": cc_session_id},
+    )
+    return [(r.cc_session_id, r.dir) for r in rows]
+
+
 async def build_coordination_block(
     db: AsyncSession, cwd: str, cc_session_id: str
 ) -> str | None:
     """Build a coordination block showing per-session activity for sibling sessions.
 
-    Uses a LEFT JOIN LATERAL to find each session's most recent tool event.
-    Sessions with tool activity show the specific tool + input; sessions with
-    only prompt activity (e.g. read-heavy sessions where Read isn't in the
-    hook matcher) fall back to showing their last prompt timestamp.
+    Uses LEFT JOIN LATERALs to find each session's most recent tool event,
+    session intent, and recent files touched.
     """
     rows = await db.execute(
         text("""
         SELECT s.cc_session_id, s.model,
                last_te.tool_name, last_te.tool_input,
                COALESCE(last_te.created_at, last_prompt.created_at, s.started_at) as last_activity,
-               EXTRACT(EPOCH FROM (now() - COALESCE(last_te.created_at, last_prompt.created_at, s.started_at))) as elapsed_sec
+               EXTRACT(EPOCH FROM (now() - COALESCE(last_te.created_at, last_prompt.created_at, s.started_at))) as elapsed_sec,
+               intent.value->>'intent' as session_intent,
+               recent_files.file_paths as recent_files
         FROM sessions s
         LEFT JOIN LATERAL (
             SELECT tool_name, tool_input, created_at
@@ -65,6 +104,23 @@ async def build_coordination_block(
               AND hook_event = 'UserPromptSubmit'
             ORDER BY created_at DESC LIMIT 1
         ) last_prompt ON true
+        LEFT JOIN LATERAL (
+            SELECT value
+            FROM session_context WHERE session_id = s.id
+              AND scope = 'session' AND key = 'session_intent'
+            LIMIT 1
+        ) intent ON true
+        LEFT JOIN LATERAL (
+            SELECT array_agg(DISTINCT fp) as file_paths
+            FROM (
+                SELECT tool_input->>'file_path' as fp
+                FROM tool_events WHERE session_id = s.id
+                  AND tool_name IN ('Write', 'Edit')
+                  AND hook_event = 'PostToolUse'
+                  AND created_at > now() - interval '24 hours'
+                ORDER BY created_at DESC LIMIT 3
+            ) sub
+        ) recent_files ON true
         WHERE s.cwd = :cwd AND s.status = 'active' AND s.cc_session_id != :sid
           AND COALESCE(last_te.created_at, last_prompt.created_at, s.started_at)
               > now() - make_interval(secs => :active_window)
@@ -87,7 +143,6 @@ async def build_coordination_block(
         tool_input = row.tool_input or {}
 
         if row.tool_name is None:
-            # No tool events — session has prompt activity or just started
             detail = "active (just started)" if row.elapsed_sec < 30 else "active (prompting)"
         elif row.tool_name in ("Write", "Edit", "Read"):
             path = tool_input.get("file_path", "unknown")
@@ -98,7 +153,21 @@ async def build_coordination_block(
         else:
             detail = row.tool_name
 
-        lines.append(f"  [session {sid_short}] {detail} ({elapsed})")
+        # Prepend intent if available
+        intent_prefix = f'"{row.session_intent}" | ' if row.session_intent else ""
+        lines.append(f"  [session {sid_short}] {intent_prefix}{detail} ({elapsed})")
+
+        # Show recent files per session
+        file_paths = row.recent_files
+        if file_paths and any(f for f in file_paths if f):
+            truncated = [_truncate_path(f) for f in file_paths if f]
+            lines.append(f"    files: {', '.join(truncated)}")
+
+    # Directory overlap detection
+    overlaps = await _detect_directory_overlap(db, cwd, cc_session_id)
+    for overlap_sid, overlap_dir in overlaps:
+        sid_short = overlap_sid[:5] if len(overlap_sid) > 5 else overlap_sid
+        lines.append(f"  [overlap] session {sid_short} is also editing {_truncate_path(overlap_dir, 3)}")
 
     return "\n".join(lines)
 
@@ -120,7 +189,62 @@ async def build_session_summary(
     for row in ctx_rows:
         parts.append(f"[context] {row.key}: {row.value}")
 
-    # 2. For resume/compact: recent activity from this session
+    # 2. Tool usage stats (last 24h, all sessions in this project)
+    tool_stats = await db.execute(
+        text("""
+        SELECT te.tool_name, count(*) as cnt
+        FROM tool_events te JOIN sessions s ON te.session_id = s.id
+        WHERE s.cwd = :cwd
+          AND te.hook_event IN ('PostToolUse', 'PreToolUse')
+          AND te.created_at > now() - interval '24 hours'
+        GROUP BY te.tool_name ORDER BY cnt DESC LIMIT 6
+    """),
+        {"cwd": cwd},
+    )
+    stats = tool_stats.fetchall()
+    if stats:
+        stat_parts = [f"{r.tool_name}: {r.cnt}" for r in stats]
+        parts.append(f"[tool stats 24h] {', '.join(stat_parts)}")
+
+    # 3. Recent errors with details (last 3 in 24h)
+    error_rows = await db.execute(
+        text("""
+        SELECT te.tool_name, te.error,
+               EXTRACT(EPOCH FROM (now() - te.created_at)) as elapsed_sec
+        FROM tool_events te JOIN sessions s ON te.session_id = s.id
+        WHERE s.cwd = :cwd AND te.hook_event = 'PostToolUseFailure'
+          AND te.created_at > now() - interval '24 hours'
+        ORDER BY te.created_at DESC LIMIT 3
+    """),
+        {"cwd": cwd},
+    )
+    errors = error_rows.fetchall()
+    if errors:
+        error_lines = []
+        for e in errors:
+            err_msg = (e.error or "unknown error")[:60]
+            error_lines.append(f'  {e.tool_name}: "{err_msg}" ({_format_elapsed(e.elapsed_sec)})')
+        parts.append("[recent errors]\n" + "\n".join(error_lines))
+
+    # 4. Cross-session edited files (last 24h)
+    edited_files = await db.execute(
+        text("""
+        SELECT DISTINCT te.tool_input->>'file_path' as file_path
+        FROM tool_events te JOIN sessions s ON te.session_id = s.id
+        WHERE s.cwd = :cwd AND te.tool_name IN ('Write', 'Edit')
+          AND te.hook_event = 'PostToolUse'
+          AND te.created_at > now() - interval '24 hours'
+        ORDER BY file_path LIMIT 15
+    """),
+        {"cwd": cwd},
+    )
+    all_files = [r.file_path for r in edited_files if r.file_path]
+    if all_files:
+        display = [_truncate_path(f) for f in all_files[:8]]
+        suffix = f" (+{len(all_files) - 8} more)" if len(all_files) > 8 else ""
+        parts.append(f"[recently edited] {', '.join(display)}{suffix}")
+
+    # 5. For resume/compact: recent activity from this session
     if source in ("resume", "compact"):
         session = await db.execute(
             select(Session.id).where(Session.cc_session_id == cc_session_id)
@@ -182,12 +306,12 @@ async def build_session_summary(
                     f"[failures] {failure_count} tool failures in the last hour"
                 )
 
-    # 3. Other active sessions in same cwd (enriched with per-session activity)
+    # 6. Other active sessions in same cwd (enriched with per-session activity)
     coordination = await build_coordination_block(db, cwd, cc_session_id)
     if coordination:
         parts.append(coordination)
 
-    # 4. Recently completed tasks (from TaskCompleted events in last hour)
+    # 7. Recently completed tasks (from TaskCompleted events in last hour)
     task_rows = await db.execute(
         text("""
         SELECT te.tool_input->>'task_subject' as subject,

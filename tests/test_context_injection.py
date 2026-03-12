@@ -464,3 +464,435 @@ async def test_task_completed_upserts_context(client):
     assert prompt_resp.status_code == 200
     ctx = prompt_resp.json().get("hookSpecificOutput", {}).get("additionalContext", "")
     assert "completed_tasks" in ctx
+
+
+async def test_tool_usage_stats_in_context(client):
+    """Tool usage stats from last 24h appear in new session context."""
+    await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "stats-s1",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/stats-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+    # Fire several PostToolUse events
+    for tool in ["Bash", "Bash", "Edit", "Write"]:
+        await client.post(
+            "/hooks/post-tool-use",
+            json={
+                "session_id": "stats-s1",
+                "transcript_path": "/tmp/t.jsonl",
+                "cwd": "/stats-project",
+                "permission_mode": "default",
+                "hook_event_name": "PostToolUse",
+                "tool_name": tool,
+                "tool_input": {"command": "echo hi"} if tool == "Bash" else {"file_path": "/stats-project/f.py"},
+                "tool_response": {"success": True},
+                "tool_use_id": f"tu-stats-{tool}",
+            },
+        )
+
+    # New session sees stats
+    response = await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "stats-s2",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/stats-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+    assert response.status_code == 200
+    ctx = response.json().get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "[tool stats 24h]" in ctx
+    assert "Bash: 2" in ctx
+
+
+async def test_recent_errors_in_context(client):
+    """Recent PostToolUseFailure errors appear in new session context."""
+    await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "err-s1",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/err-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+    await client.post(
+        "/hooks/post-tool-use-failure",
+        json={
+            "session_id": "err-s1",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/err-project",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUseFailure",
+            "tool_name": "Bash",
+            "tool_input": {"command": "npm test"},
+            "tool_use_id": "tu-err-1",
+            "error": "npm test: ENOENT no such file",
+        },
+    )
+
+    # New session sees the error
+    response = await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "err-s2",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/err-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+    assert response.status_code == 200
+    ctx = response.json().get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "[recent errors]" in ctx
+    assert "Bash" in ctx
+    assert "ENOENT" in ctx
+
+
+async def test_cross_session_edited_files(client):
+    """Files edited across sessions appear in [recently edited] for a new session."""
+    for sid, fpath in [("xedit-s1", "/xe-project/a.py"), ("xedit-s2", "/xe-project/b.py")]:
+        await client.post(
+            "/hooks/session-start",
+            json={
+                "session_id": sid,
+                "transcript_path": "/tmp/t.jsonl",
+                "cwd": "/xe-project",
+                "permission_mode": "default",
+                "hook_event_name": "SessionStart",
+                "source": "startup",
+                "model": "claude-sonnet-4-6",
+            },
+        )
+        await client.post(
+            "/hooks/post-tool-use",
+            json={
+                "session_id": sid,
+                "transcript_path": "/tmp/t.jsonl",
+                "cwd": "/xe-project",
+                "permission_mode": "default",
+                "hook_event_name": "PostToolUse",
+                "tool_name": "Edit",
+                "tool_input": {"file_path": fpath},
+                "tool_response": {"success": True},
+                "tool_use_id": f"tu-{sid}",
+            },
+        )
+
+    # Third session sees both files
+    response = await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "xedit-s3",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/xe-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+    assert response.status_code == 200
+    ctx = response.json().get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "[recently edited]" in ctx
+    assert "a.py" in ctx
+    assert "b.py" in ctx
+
+
+async def test_session_intent_stored_and_shown(client):
+    """UserPromptSubmit stores intent and sibling coordination shows it."""
+    # Session A starts and sends a prompt
+    await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "intent-a",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/intent-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+    await client.post(
+        "/hooks/user-prompt",
+        json={
+            "session_id": "intent-a",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/intent-project",
+            "permission_mode": "default",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "implement rate limiting for the API",
+        },
+    )
+    # Session A does a tool action so it appears in coordination
+    await client.post(
+        "/hooks/post-tool-use",
+        json={
+            "session_id": "intent-a",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/intent-project",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "pytest tests/"},
+            "tool_response": {"exitCode": "0"},
+            "tool_use_id": "tu-intent-1",
+        },
+    )
+
+    # Session B starts — should see session A's intent in coordination
+    response = await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "intent-b",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/intent-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+    assert response.status_code == 200
+    ctx = response.json().get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "[coordination]" in ctx
+    assert "implement rate limiting for the API" in ctx
+
+
+async def test_session_intent_only_first_prompt(client):
+    """Intent is captured from first prompt only, not updated on subsequent prompts."""
+    await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "intent-first",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/intent-first-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+    # First prompt
+    await client.post(
+        "/hooks/user-prompt",
+        json={
+            "session_id": "intent-first",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/intent-first-project",
+            "permission_mode": "default",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "first task description",
+        },
+    )
+    # Second prompt
+    await client.post(
+        "/hooks/user-prompt",
+        json={
+            "session_id": "intent-first",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/intent-first-project",
+            "permission_mode": "default",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "second completely different task",
+        },
+    )
+
+    # Create tool activity so session shows in coordination
+    await client.post(
+        "/hooks/post-tool-use",
+        json={
+            "session_id": "intent-first",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/intent-first-project",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/intent-first-project/f.py"},
+            "tool_response": {"success": True},
+            "tool_use_id": "tu-intent-first-1",
+        },
+    )
+
+    # Another session should see the FIRST prompt as intent
+    response = await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "intent-checker",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/intent-first-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+    ctx = response.json().get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "first task description" in ctx
+    assert "second completely different task" not in ctx
+
+
+async def test_coordination_shows_files_per_session(client):
+    """Coordination block includes files: line for sessions that edited files."""
+    await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "files-a",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/files-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+    await client.post(
+        "/hooks/post-tool-use",
+        json={
+            "session_id": "files-a",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/files-project",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Edit",
+            "tool_input": {"file_path": "/files-project/src/routes.py"},
+            "tool_response": {"success": True},
+            "tool_use_id": "tu-files-1",
+        },
+    )
+    await client.post(
+        "/hooks/post-tool-use",
+        json={
+            "session_id": "files-a",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/files-project",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "/files-project/src/models.py"},
+            "tool_response": {"success": True},
+            "tool_use_id": "tu-files-2",
+        },
+    )
+
+    # Session B sees files: line
+    response = await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "files-b",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/files-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+    ctx = response.json().get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "files:" in ctx
+    assert "routes.py" in ctx
+
+
+async def test_overlap_warning(client):
+    """Two sessions editing the same directory triggers [overlap] warning."""
+    # Session A edits files in /overlap-project/src/
+    await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "overlap-a",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/overlap-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+    await client.post(
+        "/hooks/post-tool-use",
+        json={
+            "session_id": "overlap-a",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/overlap-project",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Edit",
+            "tool_input": {"file_path": "/overlap-project/src/api.py"},
+            "tool_response": {"success": True},
+            "tool_use_id": "tu-overlap-1",
+        },
+    )
+
+    # Session B edits files in the same directory
+    await client.post(
+        "/hooks/session-start",
+        json={
+            "session_id": "overlap-b",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/overlap-project",
+            "permission_mode": "default",
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "claude-sonnet-4-6",
+        },
+    )
+    await client.post(
+        "/hooks/post-tool-use",
+        json={
+            "session_id": "overlap-b",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/overlap-project",
+            "permission_mode": "default",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Edit",
+            "tool_input": {"file_path": "/overlap-project/src/routes.py"},
+            "tool_response": {"success": True},
+            "tool_use_id": "tu-overlap-2",
+        },
+    )
+
+    # Session B sends a prompt — coordination refresh should include overlap warning
+    await client.post(
+        "/hooks/user-prompt",
+        json={
+            "session_id": "overlap-b",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/overlap-project",
+            "permission_mode": "default",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "First prompt for overlap-b",
+        },
+    )
+    # Second prompt triggers coordination refresh (first prompt did context injection)
+    response = await client.post(
+        "/hooks/user-prompt",
+        json={
+            "session_id": "overlap-b",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/overlap-project",
+            "permission_mode": "default",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Second prompt for overlap-b",
+        },
+    )
+    assert response.status_code == 200
+    ctx = response.json().get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "[overlap]" in ctx
+    assert "overlap" in ctx.lower()

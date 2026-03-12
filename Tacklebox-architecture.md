@@ -1004,7 +1004,7 @@ async def resolve_session(db, cc_session_id: str, cwd: str) -> uuid.UUID | None:
 
 ## 7. Hook Configurations
 
-These configurations go in `.claude/settings.json` (project) or `~/.claude/settings.json` (user). All hooks use the native `"type": "http"` handler, which POSTs the event JSON directly to the server and reads the response body. No shell commands or curl piping required.
+These configurations go in `.claude/settings.json` (project) or `~/.claude/settings.json` (user). Claude Code only supports `type: "http"` hooks for 8 of 16 event types. The remaining 8 use `type: "command"` with `curl -d @-` to pipe the event JSON from stdin to the same Tacklebox endpoints.
 
 ### 7.1 Full Settings Block
 
@@ -1015,9 +1015,9 @@ These configurations go in `.claude/settings.json` (project) or `~/.claude/setti
       {
         "hooks": [
           {
-            "type": "http",
-            "url": "http://localhost:8420/hooks/session-start",
-            "timeout": 10
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 10 -X POST http://localhost:8420/hooks/session-start -H 'Content-Type: application/json' -d @-",
+            "timeout": 15
           }
         ]
       }
@@ -1026,8 +1026,30 @@ These configurations go in `.claude/settings.json` (project) or `~/.claude/setti
       {
         "hooks": [
           {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 -X POST http://localhost:8420/hooks/session-end -H 'Content-Type: application/json' -d @-",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
             "type": "http",
-            "url": "http://localhost:8420/hooks/session-end",
+            "url": "http://localhost:8420/hooks/stop",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8420/hooks/user-prompt",
             "timeout": 5
           }
         ]
@@ -1081,35 +1103,13 @@ These configurations go in `.claude/settings.json` (project) or `~/.claude/setti
         ]
       }
     ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "http",
-            "url": "http://localhost:8420/hooks/user-prompt",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "http",
-            "url": "http://localhost:8420/hooks/stop",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
     "SubagentStart": [
       {
         "hooks": [
           {
-            "type": "http",
-            "url": "http://localhost:8420/hooks/subagent-start",
-            "timeout": 5
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 -X POST http://localhost:8420/hooks/subagent-start -H 'Content-Type: application/json' -d @-",
+            "timeout": 10
           }
         ]
       }
@@ -1129,9 +1129,9 @@ These configurations go in `.claude/settings.json` (project) or `~/.claude/setti
       {
         "hooks": [
           {
-            "type": "http",
-            "url": "http://localhost:8420/hooks/notification",
-            "timeout": 5
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 -X POST http://localhost:8420/hooks/notification -H 'Content-Type: application/json' -d @-",
+            "timeout": 10
           }
         ]
       }
@@ -1140,9 +1140,53 @@ These configurations go in `.claude/settings.json` (project) or `~/.claude/setti
       {
         "hooks": [
           {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 -X POST http://localhost:8420/hooks/pre-compact -H 'Content-Type: application/json' -d @-",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 -X POST http://localhost:8420/hooks/teammate-idle -H 'Content-Type: application/json' -d @-",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
             "type": "http",
-            "url": "http://localhost:8420/hooks/pre-compact",
+            "url": "http://localhost:8420/hooks/task-completed",
             "timeout": 5
+          }
+        ]
+      }
+    ],
+    "InstructionsLoaded": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 -X POST http://localhost:8420/hooks/instructions-loaded -H 'Content-Type: application/json' -d @-",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "ConfigChange": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -sS --fail-with-body --max-time 5 -X POST http://localhost:8420/hooks/config-change -H 'Content-Type: application/json' -d @-",
+            "timeout": 10
           }
         ]
       }
@@ -1153,7 +1197,8 @@ These configurations go in `.claude/settings.json` (project) or `~/.claude/setti
 
 ### 7.2 Configuration Notes
 
-- **Native HTTP hooks:** `"type": "http"` sends the event JSON as the POST body with `Content-Type: application/json` and reads the response body for decisions. No shell commands, stdin piping, or curl needed.
+- **HTTP vs command hooks:** 8 hooks use native `"type": "http"`, which POSTs the event JSON directly. 8 hooks use `"type": "command"` with `curl -d @-` because Claude Code only supports HTTP for certain event types. The `command` hooks pipe stdin (the event JSON) through curl to the same endpoints — the server can't tell the difference.
+- **Command hook timeouts:** The outer `timeout` (Claude Code kills the process) is set 5s higher than curl's `--max-time` (curl self-terminates). This lets curl fail gracefully with an error code before Claude Code force-kills it.
 - **Error handling:** Non-2xx responses, connection failures, and timeouts are all treated as non-blocking errors — the action proceeds. To block a tool call or deny a permission, the server must return a 2xx response with the appropriate decision JSON.
 - **Timeouts:** Defaults are 600 seconds for command hooks, 30 seconds for prompt hooks, 60 seconds for agent hooks. We set explicit short timeouts (5-10s) to keep Claude responsive.
 - **PreToolUse matcher:** Scoped to `Write|Edit|Bash` for coordination checks on state-changing operations. Using `*` would send every Read, Glob, and Grep call to the server, adding unnecessary latency. Expand the matcher if you need to audit read operations.
@@ -1162,6 +1207,8 @@ These configurations go in `.claude/settings.json` (project) or `~/.claude/setti
 - **UserPromptSubmit:** Does **not** support matchers (the field is silently ignored). The hook always fires on every prompt submission.
 - **Notification:** Has no decision control. The server logs and returns `{}`. Non-2xx responses are non-blocking.
 - **SubagentStart:** Cannot block subagent creation but can inject context into the subagent via `additionalContext`.
+- **InstructionsLoaded:** Has no decision control — fires when CLAUDE.md files are loaded. The server logs the file path, memory type, and load reason, then returns `{}`.
+- **ConfigChange:** Can block via `StopResponse`, but Tacklebox defaults to audit-only (returns `{}`). Logs which settings source changed.
 
 ### 7.3 Combining HTTP Hooks with Prompt Hooks
 

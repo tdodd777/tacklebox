@@ -11,7 +11,7 @@
       "title": "Active Sessions",
       "type": "stat",
       "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
       "targets": [
         {
           "rawSql": "SELECT count(*) as \"Active Sessions\" FROM sessions WHERE status = 'active';",
@@ -21,15 +21,47 @@
       ]
     },
     {
-      "id": 2,
-      "title": "Sessions Timeline",
-      "type": "timeseries",
+      "id": 9,
+      "title": "Avg Session Duration",
+      "type": "stat",
       "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
-      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 0 },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m"
+        },
+        "overrides": []
+      },
       "targets": [
         {
-          "rawSql": "SELECT date_trunc('hour', started_at) as time, source, count(*) as sessions FROM sessions WHERE $__timeFilter(started_at) GROUP BY time, source ORDER BY time;",
-          "format": "time_series",
+          "rawSql": "SELECT ROUND(AVG(EXTRACT(EPOCH FROM (ended_at - started_at)) / 60)::numeric, 1) as \"Avg Duration (min)\" FROM sessions WHERE ended_at IS NOT NULL AND $__timeFilter(started_at);",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Sessions per Hour",
+      "type": "barchart",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
+      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "stacking": "normal",
+        "barWidth": 0.8,
+        "orientation": "vertical",
+        "xTickLabelRotation": -45
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT to_char(date_trunc('hour', started_at), 'MM-DD HH24:00') as hour, count(*) as sessions FROM sessions WHERE $__timeFilter(started_at) GROUP BY hour ORDER BY hour;",
+          "format": "table",
           "refId": "A"
         }
       ]
@@ -49,15 +81,54 @@
       ]
     },
     {
-      "id": 4,
-      "title": "Tool Failures",
+      "id": 10,
+      "title": "Tool Usage Over Time",
       "type": "timeseries",
       "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "stacking": { "mode": "normal" },
+            "fillOpacity": 80,
+            "barAlignment": 0
+          }
+        },
+        "overrides": []
+      },
       "targets": [
         {
-          "rawSql": "SELECT date_trunc('hour', created_at) as time, tool_name, count(*) as failures FROM tool_events WHERE hook_event = 'PostToolUseFailure' AND $__timeFilter(created_at) GROUP BY time, tool_name ORDER BY time;",
+          "rawSql": "SELECT date_trunc('hour', created_at) as time, tool_name, count(*) as invocations FROM tool_events WHERE $__timeFilter(created_at) GROUP BY time, tool_name ORDER BY time;",
           "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Tool Failures",
+      "type": "table",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "rawSql": "SELECT te.created_at as time, s.cc_session_id as session, te.tool_name, COALESCE(te.error, te.tool_response->>'error', 'unknown') as error_message FROM tool_events te JOIN sessions s ON s.id = te.session_id WHERE te.hook_event = 'PostToolUseFailure' AND $__timeFilter(te.created_at) ORDER BY te.created_at DESC LIMIT 50;",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Sessions by Directory",
+      "type": "table",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "rawSql": "SELECT cwd as directory, count(*) as total_sessions, count(*) FILTER (WHERE status = 'active') as active FROM sessions WHERE $__timeFilter(started_at) GROUP BY cwd ORDER BY total_sessions DESC LIMIT 20;",
+          "format": "table",
           "refId": "A"
         }
       ]
@@ -67,7 +138,7 @@
       "title": "File Lock Warnings",
       "type": "table",
       "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
       "targets": [
         {
           "rawSql": "SELECT te.created_at as time, s.cc_session_id as session, te.tool_input->>'file_path' as file, te.decision as action FROM tool_events te JOIN sessions s ON s.id = te.session_id WHERE te.decision = 'warn' AND $__timeFilter(te.created_at) ORDER BY te.created_at DESC LIMIT 50;",
@@ -81,10 +152,21 @@
       "title": "Stop Blocks",
       "type": "table",
       "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "reason" },
+            "properties": [
+              { "id": "custom.width", "value": 400 }
+            ]
+          }
+        ]
+      },
       "targets": [
         {
-          "rawSql": "SELECT sb.created_at as time, s.cc_session_id as session, sb.reason FROM stop_blocks sb JOIN sessions s ON s.id = sb.session_id WHERE $__timeFilter(sb.created_at) ORDER BY sb.created_at DESC LIMIT 50;",
+          "rawSql": "SELECT sb.created_at as time, s.cc_session_id as session, REPLACE(REPLACE(sb.reason, '[{''', ''), '''}]', '') as reason FROM stop_blocks sb JOIN sessions s ON s.id = sb.session_id WHERE $__timeFilter(sb.created_at) ORDER BY sb.created_at DESC LIMIT 50;",
           "format": "table",
           "refId": "A"
         }
@@ -93,12 +175,12 @@
     {
       "id": 7,
       "title": "Notification Types",
-      "type": "piechart",
+      "type": "barchart",
       "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
       "targets": [
         {
-          "rawSql": "SELECT notification_type, count(*) as total FROM notifications WHERE $__timeFilter(created_at) GROUP BY notification_type;",
+          "rawSql": "SELECT notification_type, count(*) as total FROM notifications WHERE $__timeFilter(created_at) GROUP BY notification_type ORDER BY total DESC;",
           "format": "table",
           "refId": "A"
         }
@@ -109,7 +191,7 @@
       "title": "Subagent Activity",
       "type": "barchart",
       "datasource": { "type": "grafana-postgresql-datasource", "uid": "P8486BE4CAA945761" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
       "targets": [
         {
           "rawSql": "SELECT agent_type, count(*) as spawns FROM subagent_events WHERE hook_event = 'SubagentStart' AND $__timeFilter(created_at) GROUP BY agent_type ORDER BY spawns DESC;",
@@ -127,5 +209,5 @@
   "timezone": "",
   "title": "Tacklebox",
   "uid": "tacklebox-main",
-  "version": 2
+  "version": 3
 }
