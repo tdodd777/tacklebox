@@ -118,43 +118,35 @@ The tests require a separate `tacklebox_test` database. Create it first:
 docker compose exec db psql -U tacklebox -d postgres -c "CREATE DATABASE tacklebox_test OWNER tacklebox;"
 ```
 
-Then run all 15 tests:
+Then run the suite:
 
 ```bash
 pytest tests/ -v
 ```
 
-Expected output:
+Expected output (abridged):
 
 ```
-tests/test_context_injection.py::test_startup_no_context_on_fresh_db PASSED
-tests/test_context_injection.py::test_project_context_injected_on_start PASSED
-tests/test_context_injection.py::test_coordination_count_in_context PASSED
-tests/test_file_lock.py::test_file_lock_warns_on_conflict PASSED
-tests/test_file_lock.py::test_no_warning_without_conflict PASSED
-tests/test_pre_tool_use.py::test_pre_tool_use_logs_event PASSED
-tests/test_pre_tool_use.py::test_post_tool_use_updates_context PASSED
-tests/test_pre_tool_use.py::test_post_tool_use_failure_logs PASSED
-tests/test_session_lifecycle.py::test_session_start_creates_session PASSED
-tests/test_session_lifecycle.py::test_session_start_upsert PASSED
-tests/test_session_lifecycle.py::test_session_end_marks_completed PASSED
-tests/test_session_lifecycle.py::test_session_auto_creates_on_missing PASSED
-tests/test_stop_handler.py::test_stop_allows_when_no_tasks PASSED
-tests/test_stop_handler.py::test_stop_blocks_with_incomplete_tasks PASSED
-tests/test_stop_handler.py::test_stop_safety_valve_after_max_blocks PASSED
+tests/test_context_injection.py ............ PASSED
+tests/test_file_lock.py ......... PASSED
+tests/test_instructions_and_config.py ......... PASSED
+tests/test_pre_tool_use.py ......... PASSED
+tests/test_session_lifecycle.py ......... PASSED
+tests/test_stop_handler.py ......... PASSED
 
-15 passed
+31 passed
 ```
 
 ### What the tests cover
 
-| Test file | What it validates |
-|-----------|-------------------|
-| `test_session_lifecycle.py` | Session create, upsert on re-start, end marks completed, auto-create on unknown session |
-| `test_context_injection.py` | No context on fresh DB, project context injected on SessionStart, coordination count shows other active sessions |
-| `test_pre_tool_use.py` | Tool event logging, post-tool-use context updates, failure logging |
-| `test_file_lock.py` | Warns when another session recently edited the same file, no warning without conflict |
-| `test_stop_handler.py` | Allows stop with no tasks, blocks with incomplete tasks, safety valve after max blocks |
+| Test file | Area validated |
+|-----------|----------------|
+| `test_session_lifecycle.py` | Session create, upsert, end, auto-create on unknown id |
+| `test_context_injection.py` | Project context, coordination block, intent extraction, UserPromptSubmit fallback for the SessionStart bug, re-injection cadence, overlap detection, task completion |
+| `test_pre_tool_use.py` | Tool event logging, last-edited-files context, failure logging |
+| `test_file_lock.py` | Concurrent edit warning, no-warning baseline |
+| `test_stop_handler.py` | Allow with no tasks, block with tasks, safety valve at STOP_MAX_BLOCKS |
+| `test_instructions_and_config.py` | InstructionsLoaded and ConfigChange event capture |
 
 ---
 
@@ -364,18 +356,7 @@ This is the real end-to-end test. The hooks config is already in `.claude/settin
 3. Navigate to **Dashboards** in the left sidebar.
 4. Open the **Tacklebox** dashboard.
 
-You should see 8 panels:
-
-| Panel | Type | What it shows |
-|-------|------|---------------|
-| Active Sessions | Stat | Current count of active sessions |
-| Sessions Timeline | Time series | Sessions started over time by source |
-| Tool Usage | Bar chart | Tool invocation counts |
-| Tool Failures | Time series | Failed tool invocations over time |
-| File Lock Warnings | Table | Recent file conflict warnings |
-| Stop Blocks | Table | When/why the stop hook blocked |
-| Notification Types | Pie chart | Distribution of notification types |
-| Subagent Activity | Bar chart | Subagent spawns by type |
+The dashboard has panels for sessions (active count, per-hour rate, average duration), tool usage (totals and over time), tool failures, sessions by directory, file lock warnings, stop blocks, notification types, and subagent activity.
 
 > **Note:** The Grafana datasource is configured to connect to `db:5432` (the Docker network hostname). If you're running PostgreSQL outside of Docker, you'll need to edit `grafana/provisioning/datasources/postgres.yml` and change `url: db:5432` to `url: host.docker.internal:5432`.
 
@@ -473,7 +454,7 @@ You have a local PostgreSQL install. Either:
 | `docker compose down` | Stop everything |
 | `alembic upgrade head` | Run database migrations |
 | `uvicorn tacklebox.main:app --port 8420 --reload` | Start the server |
-| `pytest tests/ -v` | Run all 15 tests |
+| `pytest tests/ -v` | Run the test suite |
 | `curl http://localhost:8420/health` | Check server health |
 | `curl http://localhost:8420/docs` | Open interactive API docs |
-| `http://localhost:3000` | Open Grafana (admin/admin) |
+| `http://localhost:3000` | Open Grafana (admin/tacklebox) |
