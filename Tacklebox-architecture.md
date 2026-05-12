@@ -770,13 +770,10 @@ This section defines the step-by-step logic for each hook endpoint. Every handle
 
 ```
 1. Parse request body as SessionStartInput
-2. Upsert into sessions table:
-     INSERT INTO sessions (cc_session_id, cwd, model, source, permission_mode, status)
-     VALUES ($session_id, $cwd, $model, $source, $permission_mode, 'active')
-     ON CONFLICT (cc_session_id)
-     DO UPDATE SET source = $source, model = $model, permission_mode = $permission_mode,
-                   status = 'active', started_at = now(), ended_at = NULL
-     RETURNING id
+2. Look up the session row by `cc_session_id`:
+   - If found, update `source`, `model`, `permission_mode`, set `status = 'active'`, `started_at = now()`, `ended_at = NULL`.
+   - If not found, INSERT a new row with the same fields and `status = 'active'`.
+   - (Note: `resolve_session` in `services/audit.py` uses atomic `INSERT ON CONFLICT` for non-SessionStart events where race-free upsert matters more.)
 3. Build activity summary (see section 8.3 for template):
    a. Query project-scoped context keys for this cwd
    b. If source is 'resume' or 'compact':
@@ -971,15 +968,17 @@ This is the most complex handler due to infinite-loop prevention.
 Every handler needs to map `session_id` (the Claude Code string) to the internal UUID. This is a shared helper:
 
 ```python
-from functools import lru_cache
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
 from .models import Session
 
-async def resolve_session(db, cc_session_id: str, cwd: str) -> uuid.UUID | None:
+async def resolve_session(
+    db: AsyncSession, cc_session_id: str, cwd: str
+) -> uuid.UUID:
     """Look up or create the internal session ID.
 
-    If SessionStart hasn't fired yet (e.g., the server restarted mid-session),
-    auto-create a session row to avoid losing events.
+    Uses INSERT ON CONFLICT to avoid race conditions when two concurrent
+    requests try to create the same session.
     """
     result = await db.execute(
         select(Session.id).where(Session.cc_session_id == cc_session_id)
@@ -988,16 +987,16 @@ async def resolve_session(db, cc_session_id: str, cwd: str) -> uuid.UUID | None:
     if row:
         return row
 
-    # Auto-create if missing (fail-open: don't reject events)
-    new_session = Session(
-        cc_session_id=cc_session_id,
-        cwd=cwd,
-        source="startup",
-        status="active",
+    result = await db.execute(
+        text("""
+            INSERT INTO sessions (cc_session_id, cwd, source, status)
+            VALUES (:cc_session_id, :cwd, 'startup', 'active')
+            ON CONFLICT (cc_session_id) DO UPDATE SET cc_session_id = EXCLUDED.cc_session_id
+            RETURNING id
+        """),
+        {"cc_session_id": cc_session_id, "cwd": cwd},
     )
-    db.add(new_session)
-    await db.flush()
-    return new_session.id
+    return result.scalar_one()
 ```
 
 ---
@@ -1555,7 +1554,7 @@ Errors are logged to a local file for debugging. The log includes:
 - The full exception traceback
 - The event type and session ID (from the input, not the DB)
 
-The log file path is configurable via `LOG_FILE` (default: `~/.local/share/tacklebox/server.log`).
+Errors are written to the uvicorn process stderr; production deployments should route stderr to the host log infrastructure (journald, CloudWatch, etc.) rather than relying on application-level file logging.
 
 ### 9.4 What Can Go Wrong
 
@@ -1644,8 +1643,7 @@ The server reads configuration from environment variables with sensible defaults
 | CONTEXT_SUMMARY_LIMIT | 20 | Max recent events to summarize on SessionStart |
 | STOP_MAX_BLOCKS | 3 | Max times the Stop hook can block before allowing stop |
 | SESSION_TIMEOUT_SEC | 14400 | Mark sessions as interrupted after this idle time (4 hours) |
-| LOG_FILE | ~/.local/share/tacklebox/server.log | Error log location |
-| LOG_LEVEL | INFO | Logging level |
+| LOG_LEVEL | INFO | Logging level (output goes to process stderr) |
 
 ### 10.4 Background Tasks
 
@@ -2238,7 +2236,7 @@ Then restart Claude Code (or start a new session) for hooks to take effect.
 1. Start a Claude Code session in a project.
 2. Check the server logs — you should see a SessionStart event.
 3. Ask Claude to write a file. You should see PreToolUse and PostToolUse events.
-4. Open Grafana at `http://localhost:3000` (default login: admin/admin).
+4. Open Grafana at `http://localhost:3000` (default login: admin/tacklebox, set via `GF_SECURITY_ADMIN_PASSWORD` in docker-compose).
 5. Navigate to the "Tacklebox" dashboard. You should see the session and tool events.
 
 ### 14.5 Running as a Background Service (macOS)
