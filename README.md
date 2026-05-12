@@ -167,7 +167,7 @@ createdb -U tacklebox tacklebox_test
 pytest tests/ -v
 ```
 
-32 tests covering session lifecycle, context injection, coordination, file lock detection, tool hooks, stop blocking, session intent, overlap detection, observability hooks, and the fail-open exception path.
+Tests cover session lifecycle, context injection, coordination, file lock detection, tool hooks, stop blocking, session intent, overlap detection, observability hooks, the fail-open exception path, and the context API. See `TESTING.md` for the setup walkthrough.
 
 ## Security
 

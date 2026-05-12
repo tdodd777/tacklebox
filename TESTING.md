@@ -134,8 +134,9 @@ tests/test_pre_tool_use.py ......... PASSED
 tests/test_session_lifecycle.py ......... PASSED
 tests/test_stop_handler.py ......... PASSED
 tests/test_fail_open.py ......... PASSED
+tests/test_context_api.py ......... PASSED
 
-32 passed
+34 passed
 ```
 
 ### What the tests cover
@@ -148,6 +149,8 @@ tests/test_fail_open.py ......... PASSED
 | `test_file_lock.py` | Concurrent edit warning, no-warning baseline |
 | `test_stop_handler.py` | Allow with no tasks, block with tasks, safety valve at STOP_MAX_BLOCKS |
 | `test_instructions_and_config.py` | InstructionsLoaded and ConfigChange event capture |
+| `test_fail_open.py` | Handler exceptions return 200 {}, fail_open_error_count increments |
+| `test_context_api.py` | PUT /context honors scope=session vs project, rejects invalid scope |
 
 ---
 
