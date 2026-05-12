@@ -105,7 +105,7 @@ Test the health endpoint:
 
 ```bash
 curl http://localhost:8420/health
-# {"status":"ok"}
+# {"status":"ok","fail_open_errors":0}
 ```
 
 ---
@@ -133,8 +133,9 @@ tests/test_instructions_and_config.py ......... PASSED
 tests/test_pre_tool_use.py ......... PASSED
 tests/test_session_lifecycle.py ......... PASSED
 tests/test_stop_handler.py ......... PASSED
+tests/test_fail_open.py ......... PASSED
 
-31 passed
+32 passed
 ```
 
 ### What the tests cover
@@ -358,7 +359,7 @@ This is the real end-to-end test. The hooks config is already in `.claude/settin
 
 The dashboard has panels for sessions (active count, per-hour rate, average duration), tool usage (totals and over time), tool failures, sessions by directory, file lock warnings, stop blocks, notification types, and subagent activity.
 
-> **Note:** The Grafana datasource is configured to connect to `db:5432` (the Docker network hostname). If you're running PostgreSQL outside of Docker, you'll need to edit `grafana/provisioning/datasources/postgres.yml` and change `url: db:5432` to `url: host.docker.internal:5432`.
+> **Note:** The Grafana datasource is configured to connect to `host.docker.internal:5432`, which works whether Postgres runs in Docker (via the host gateway) or directly on the host. For a pure-Docker setup where Grafana and Postgres share the same compose network, edit `grafana/provisioning/datasources/postgres.yml` and change `url: host.docker.internal:5432` to `url: db:5432`.
 
 ---
 

@@ -44,7 +44,7 @@ The system addresses three core problems:
 
 The system consists of three layers:
 
-- **Native HTTP hooks:** Claude Code supports `"type": "http"` hooks that POST event JSON directly to a URL. No shell scripts, curl commands, or stdin piping required. Claude Code sends the hook input as the POST request body with `Content-Type: application/json` and reads the response body for decisions.
+- **HTTP and command hooks:** Claude Code supports `"type": "http"` hooks that POST event JSON directly to a URL for 8 of 16 event types (Stop, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest, SubagentStop, TaskCompleted). For the other 8 (SessionStart, SessionEnd, SubagentStart, Notification, PreCompact, TeammateIdle, InstructionsLoaded, ConfigChange), Claude Code silently ignores HTTP configs and Tacklebox falls back to `"type": "command"` hooks that pipe the JSON body to `curl -d @-`. Either way the server receives a `Content-Type: application/json` POST and reads the response body for decisions where the event type supports them.
 - **State server:** A FastAPI application running on localhost that receives hook events, queries and writes to PostgreSQL, and returns structured JSON responses conforming to Claude Code's per-event output schemas.
 - **PostgreSQL database:** Stores sessions, tool events, shared context, and session key-value state. Provides the persistence and query capabilities that file-based approaches lack.
 
@@ -2196,7 +2196,7 @@ pytest tests/test_file_lock.py -v
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/<your-org>/tacklebox.git
+git clone <your-fork-of-this-repo>
 cd tacklebox
 
 # 2. Start PostgreSQL and Grafana

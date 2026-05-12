@@ -81,6 +81,9 @@ pip install -e ".[dev]"
 # Configure environment (defaults work with local PostgreSQL)
 cp .env.example .env
 
+# Start Postgres (and Grafana) in Docker
+docker compose up -d
+
 # Run database migrations
 alembic upgrade head
 
@@ -99,7 +102,7 @@ curl http://localhost:8420/health
 
 Add the hook configuration to your Claude Code settings (`~/.claude/settings.json`). See `.claude/settings.json` in this repo for the full config.
 
-Claude Code only supports `type: "http"` hooks for 8 of 16 event types (Stop, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest, SubagentStop, TaskCompleted). The other 8 (SessionStart, SessionEnd, SubagentStart, Notification, PreCompact, TeammateIdle, InstructionsLoaded, ConfigChange) silently ignore HTTP configs. Tacklebox uses `type: "command"` with `curl` for these — the server receives identical POST requests either way.
+Claude Code only supports `type: "http"` hooks for 8 of 16 event types (Stop, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest, SubagentStop, TaskCompleted). The other 8 (SessionStart, SessionEnd, SubagentStart, Notification, PreCompact, TeammateIdle, InstructionsLoaded, ConfigChange) silently ignore HTTP configs. Tacklebox uses `type: "command"` with `curl` for these — the server receives the same JSON body either way, though response handling can differ by event type (see the SessionStart note above).
 
 ## Configuration
 
@@ -164,7 +167,7 @@ createdb -U tacklebox tacklebox_test
 pytest tests/ -v
 ```
 
-31 tests covering session lifecycle, context injection, coordination, file lock detection, tool hooks, stop blocking, session intent, overlap detection, and observability hooks.
+32 tests covering session lifecycle, context injection, coordination, file lock detection, tool hooks, stop blocking, session intent, overlap detection, observability hooks, and the fail-open exception path.
 
 ## Security
 
