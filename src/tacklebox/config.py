@@ -10,7 +10,6 @@ class Settings(BaseSettings):
     CONTEXT_SUMMARY_LIMIT: int = 20
     STOP_MAX_BLOCKS: int = 3
     SESSION_TIMEOUT_SEC: int = 14400
-    LOG_FILE: str = "~/.local/share/tacklebox/server.log"
     LOG_LEVEL: str = "INFO"
     LOG_PROMPTS: bool = False
     LOG_SESSION_INTENT: bool = True
