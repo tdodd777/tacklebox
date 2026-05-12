@@ -44,7 +44,7 @@ class ContextUpdate(BaseModel):
     session_id: str
     key: str
     value: Any
-    scope: str = "project"
+    scope: Literal["session", "project"] = "project"
 
 
 @router.put("/context")
@@ -53,9 +53,12 @@ async def put_context(
     db: AsyncSession = Depends(get_db),
 ):
     from ..services.audit import resolve_session
-    from ..services.context import upsert_project_context
+    from ..services.context import upsert_project_context, upsert_session_context
 
     internal_id = await resolve_session(db, body.session_id, body.cwd)
-    await upsert_project_context(db, internal_id, body.cwd, body.key, body.value)
+    if body.scope == "session":
+        await upsert_session_context(db, internal_id, body.cwd, body.key, body.value)
+    else:
+        await upsert_project_context(db, internal_id, body.cwd, body.key, body.value)
     await db.commit()
     return {"status": "ok"}
